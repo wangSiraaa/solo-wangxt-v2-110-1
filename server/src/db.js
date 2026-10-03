@@ -4,8 +4,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 
-const { Pool } = pg;
+const { Pool, types } = pg;
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// BIGINT/BIGSERIAL 默认被 node-pg 解析为字符串。本系统的版本号、主键远小于 2^53，
+// 统一按 number 返回，避免 API 上版本比较出现 '2' !== 2 的混淆。
+types.setTypeParser(20 /* int8 */, (v) => (v === null ? null : Number(v)));
 
 export const pool = new Pool({
   host: config.db.host,

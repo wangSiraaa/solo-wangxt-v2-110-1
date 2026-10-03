@@ -6,6 +6,9 @@
         验证器只允许访问随项目启动的本地站点（127.0.0.1:4568）；
         每一跳的状态码、Location、最终状态都落库。映射表填完<b>不等于</b>迁移完成——
         只有这里出现绿色裁决，发布闸门才可能放行。
+        <br />当前<b>映射版本 v{{ mappingVersion }}</b>。变更集应用后版本前进，
+        受影响链接的旧裁决/逐跳证据会标为 <span class="badge bad">已过期</span>，
+        必须重新验证才能继续支撑方案发布。
       </p>
       <div style="flex:1; text-align:right">
         <button class="btn" :disabled="running" @click="runAll">
@@ -27,7 +30,7 @@
     <table>
       <thead>
         <tr>
-          <th>裁决</th><th>旧址（原始录入）</th><th>最终 URL</th><th>最终状态</th>
+          <th>裁决</th><th>旧址（原始录入）</th><th>证据版本</th><th>最终 URL</th><th>最终状态</th>
           <th>跳数</th><th>追踪参数</th><th>问题 / 证据</th>
         </tr>
       </thead>
@@ -35,6 +38,13 @@
         <tr v-for="row in rows" :key="row.id">
           <td><VerdictBadge :verdict="row.verdict" :label="label" /></td>
           <td class="mono">{{ row.source_raw }}</td>
+          <td>
+            <span v-if="row.verdict_stale || row.needs_reverify" class="badge bad">
+              已过期 v{{ row.verdict_version ?? '?' }}/{{ row.mapping_version ?? '?' }}
+            </span>
+            <span v-else-if="row.verdict" class="badge ok">v{{ row.verdict_version }}</span>
+            <span v-else class="badge neutral">未验证</span>
+          </td>
           <td class="mono">{{ row.final_url_raw || '—' }}</td>
           <td>{{ row.final_status ?? '—' }}</td>
           <td>{{ row.hops ?? '—' }}</td>
@@ -85,6 +95,7 @@ const label = ref({});
 const running = ref(false);
 const hops = ref([]);
 const hopsKey = ref('');
+const mappingVersion = ref(1);
 
 const counts = computed(() => {
   const c = { ok: 0, ambiguity: 0, loop: 0, long: 0, badStatus: 0, fetch: 0, unverified: 0 };
@@ -103,7 +114,8 @@ const counts = computed(() => {
 async function load() {
   const d = await api.mappings();
   label.value = d.verdictLabel;
-  // 输入材料去重为每个归一化键一行展示
+  mappingVersion.value = d.mapping_version;
+  // 输入材料去重为每个归一化键一行展示（带映射版本与证据过期标记）
   const byKey = new Map();
   for (const i of d.inputs) {
     if (!byKey.has(i.source_norm)) byKey.set(i.source_norm, i);

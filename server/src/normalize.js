@@ -21,6 +21,22 @@ function canonicalizePercentEscapes(str) {
   return str.replace(/%[0-9a-fA-F]{2}/g, (m) => '%' + m.slice(1).toUpperCase());
 }
 
+/**
+ * WHATWG URL 会把非法百分号转义（%zz、%2 截断等）原样保留而不是报错；
+ * 变更集是要落库生效的依据，编码本身非法就必须整体拒绝（不可半套落库）。
+ * 返回 true 表示不含非法转义。
+ */
+export function hasValidPercentEscapes(raw) {
+  const i = raw.indexOf('%');
+  if (i === -1) return true;
+  for (let k = 0; k < raw.length; k++) {
+    if (raw[k] !== '%') continue;
+    if (!/^[0-9a-fA-F]{2}$/.test(raw.slice(k + 1, k + 3))) return false;
+    k += 2;
+  }
+  return true;
+}
+
 function normalizePathname(pathname, mode) {
   // WHATWG URL 已把原始 UTF-8 字符百分号编码、保留已有转义；只统一大小写。
   let p = canonicalizePercentEscapes(pathname);
@@ -121,8 +137,7 @@ export function normalize(rawInput, opts = {}) {
  * 将“追踪参数”从旧 URL 合并到目标 URL 上（迁移跳转必须保留追踪参数）。
  * 不触碰目标上已有的非追踪参数；同名追踪参数以源侧为准。
  */
-export function carryTrackers(sourceRaw, targetRaw) {
-  const s = new URL(sourceRaw);
+export function carryTrackers(sourceRaw, targetRaw) {  const s = new URL(sourceRaw);
   const t = new URL(targetRaw);
   const { trackers } = splitQuery(s.search);
   const existing = splitQuery(t.search);
@@ -134,4 +149,29 @@ export function carryTrackers(sourceRaw, targetRaw) {
   ];
   t.search = parts.length ? `?${parts.join('&')}` : '';
   return t.toString();
+}
+
+/**
+ * 严格解析：在 normalize 之上额外拒绝非法百分号编码（WHATWG 静默保留）。
+ */
+export function strictNormalize(rawInput, opts = {}) {
+  if (typeof rawInput !== 'string' || rawInput.trim() === '') {
+    return { ok: false, error: 'empty url' };
+  }
+  if (!hasValidPercentEscapes(rawInput.trim())) {
+    return { ok: false, error: 'invalid percent-encoding（存在非法 %XX 转义）' };
+  }
+  return normalize(rawInput, opts);
+}
+
+/**
+ * 判定 URL 是否指向随项目启动的本地站点（唯一允许落库/验证的目标，防 SSRF）。
+ * host 必须是字面白名单主机，端口必须完全一致；不做 DNS 解析。
+ */
+export function isLocalOrigin(normResult) {
+  if (!normResult?.ok) return false;
+  return (
+    normResult.host === config.fixture.host &&
+    normResult.port === String(config.fixture.port)
+  );
 }

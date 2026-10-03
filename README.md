@@ -24,6 +24,12 @@
 5. **PostgreSQL 保存三类数据**：旧新映射（原始材料 `mapping_inputs` + 生效表
    `url_mappings`）、爬取逐跳结果（`crawl_results`）、迁移方案（`migration_plans`
    / `migration_plan_items`），另存每入口最终裁决 `verification_verdicts`。
+6. **映射变更集（临近发布的多人协作）**：编辑不再即时改掉验证依据，改动先进入
+   `mapping_changesets`（草稿 → 可审阅 → 已应用 / 已过期 / 已放弃）。创建时冻结
+   `base_mapping_version` 与生效快照；应用在**单事务**内按当前版本检测冲突、
+   重算规范化歧义和生效映射，版本每前进一步（`mapping_versions`），受影响链接的
+   旧裁决/逐跳证据与未发布方案立即 **stale**，重新验证、重建方案后才可发布。
+   外网目标、无效百分号编码、未裁决歧义一律整组拒绝，绝不落“半套改动”。
 
 ## 快速开始
 
@@ -36,7 +42,8 @@ npm run pg:start        # 启动 tools/ 下的本地 PostgreSQL（127.0.0.1:5543
 npm run migrate         # 建库 + 建表
 npm run seed            # 写入 10 条演示录入（含全部异常场景）
 
-npm test                # 19 项测试：规范化规则 + 验证器集成（真实启动本地站点）
+npm test                # 27 项测试：规范化规则 + 验证器集成（真实本地站点）
+                        #          + 映射变更集 8 项验收（事务/冲突/过期/版本绑定）
 npm run verify          # CLI：对全部映射真实请求验证并给出裁决
 node scripts/report.js  # 产出 docs/verification-report-before.md 风格的证据报告
 
@@ -81,18 +88,46 @@ FIXTURE_MODE=fixed node scripts/report.js
 ```
 
 工作台里的“迁移方案”也遵循同样闸门：纳入方案只是 `pending`，
-`build` 时按最新裁决标注 `verified/blocked`；`publish` 时只要存在
-blocked/pending、未纳入的生效映射或未裁决歧义，就返回 **409 + 受影响链接清单**。
+`build` 时按**当前映射版本**的最新裁决标注 `verified/blocked` 并冻结版本；
+`publish` 时只要方案版本过期、存在 blocked/pending、未纳入的生效映射或未裁决歧义，
+就返回 **409 + 受影响链接清单**。变更集应用后旧方案自动 stale，必须重新验证、重建。
+
+## 映射变更集（多人改动同一批旧址）
+
+```
+草稿(draft) ──提交──▶ 可审阅(in_review) ──应用──▶ 已应用(applied)
+   │                     │                    （冲突）
+   │                     ├──应用冲突──▶ 已过期(stale，保留 base/theirs/ours 三方差异)
+   └──放弃───────────────┴──────────────▶ 已放弃(abandoned)
+```
+
+- **冻结版本**：创建时记录 `base_mapping_version` 与全部生效映射快照；
+- **条目是原始 URL 级改动**：`add`（新增，不允许对既有键声明不同目标）、
+  `modify`（显式修改/裁决歧义，给冲突键唯一目标）、`remove`（删除）；
+  每条含原始旧址、目标/已删除裁决（`manual`/`deleted`）；
+- **提交审阅 = 整组校验**：无效百分号编码、外网（非 127.0.0.1:4568）目标、
+  未裁决歧义整体拒绝，变更集保持草稿、生效映射毫无变化；
+- **应用 = 单事务**：`pg_advisory_xact_lock` 串行化 → 比对当前版本，被先应用者
+  改过的同 canonical key 触发过期（409，展示三方差异，不覆盖）→ 落原始材料 →
+  重算歧义和生效映射 → 写新版本 → 旧裁决/证据/未发布方案标 stale；
+- **幂等可审计**：对 `applied/stale` 变更集重复应用返回首次保存的同一结果；
+  原始输入、冻结版本、应用版本、影响键、冲突三方差异永久保留。
 
 ## API 摘要
 
 | 方法/路径 | 作用 |
 |---|---|
-| `POST /api/normalize` | 规范化试算（不写库） |
-| `GET/POST /api/mappings` | 原始录入材料 / 录入一条（自动重算生效与冲突） |
-| `POST /api/verify` | 对全部（或指定 `source_norm`）真实验证 |
+| `POST /api/normalize` | 规范化试算（不写库，含非法编码与本地目标判定） |
+| `GET/POST /api/mappings` | 原始录入材料 / 录入一条（版本化提交，自动重算并令旧证据过期） |
+| `POST /api/verify` | 对全部（或指定 `source_norm`）真实验证，裁决绑定当前映射版本 |
 | `GET /api/crawl/:key` | 查看某条链接的逐跳证据 |
-| `GET/POST /api/plans`、`POST /api/plans/:id/build`、`POST /api/plans/:id/publish` | 方案与发布闸门 |
+| `GET /api/mapping-versions` | 映射版本历史（每版关联来源变更集） |
+| `GET/POST /api/changesets`、`GET /api/changesets/:id` | 变更集列表 / 创建（冻结版本+快照）/ 详情（差异、冲突、校验） |
+| `POST /api/changesets/:id/items`、`DELETE …/items/:itemId` | 草稿内增改/移除一条原始 URL 改动（硬校验外网/编码） |
+| `POST /api/changesets/:id/submit` | 草稿→可审阅（整组校验：外网/编码/歧义全拒） |
+| `POST /api/changesets/:id/apply` | 单事务应用；冲突 409+三方差异转过期；重复应用幂等 |
+| `POST /api/changesets/:id/abandon` | 放弃草稿/可审阅变更集 |
+| `GET/POST /api/plans`、`POST /api/plans/:id/build`、`POST /api/plans/:id/publish` | 方案与发布闸门（绑定映射版本，过期不放行） |
 
 ## 环境变量（见 `.env.example`）
 
@@ -119,12 +154,15 @@ cd /workspace && npm run pg:start
 ## 目录
 
 ```
-server/src/   normalize.js(规范化规则) verifier.js(白名单/环/长链/最终状态)
-              ambiguity.js mappings-service.js verify-runner.js
-              fixture.js(随项目本地站点) routes.js(Fastify) db.js
-server/sql/   schema.sql
-web/          Vue 3 + Vite 工作台（总览/证据/方案闸门/规则四页）
+server/src/   normalize.js(规范化规则/严格编码校验/本地目标判定)
+              verifier.js(白名单/环/长链/最终状态)
+              ambiguity.js mappings-service.js(差异同步/版本化提交/证据过期)
+              changesets-service.js(变更集状态机/冲突三方差异/单事务应用)
+              verify-runner.js(版本绑定裁决) fixture.js(随项目本地站点)
+              routes.js(Fastify) db.js
+server/sql/   schema.sql（含幂等升级：mapping_versions / mapping_changesets* 等）
+web/          Vue 3 + Vite 工作台（总览/变更集/证据/方案闸门/规则五页）
 scripts/      start-pg.js remediate.js report.js
 docs/         verification-report-before.md / -after.md（真实跑出来的证据）
-server/test/  规则单测 + 验证器集成测试（19 项）
+server/test/  规则单测 + 验证器集成 + 变更集验收测试（27 项）
 ```

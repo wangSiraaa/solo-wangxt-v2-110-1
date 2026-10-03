@@ -45,6 +45,9 @@ export function buildFixtureApp() {
     ['/news/123', '/articles/123'],
     ['/column/weekly/', '/sections/weekly'],
     ['/old-files%2Fdraft', '/files%2Fdraft'],
+    // 变更集演示/测试用：新栏目上线后新增的旧址跳转
+    ['/t-new/1', '/articles/123'],
+    ['/t-new/2', '/articles/tech/42'],
     // 修复模式：长链改直跳、环打断；默认模式保留缺陷
     ...(fixed
       ? [

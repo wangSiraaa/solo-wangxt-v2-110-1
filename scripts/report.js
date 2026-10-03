@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { pool } from '../server/src/db.js';
 import { buildFixtureApp } from '../server/src/fixture.js';
 import { runVerification, VERDICT_LABEL } from '../server/src/verify-runner.js';
+import { getCurrentVersion } from '../server/src/mappings-service.js';
 import { config } from '../server/src/config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -23,6 +24,7 @@ try {
 
   const { rows: verdicts } = await pool.query(
     'SELECT * FROM verification_verdicts ORDER BY source_norm');
+  const currentVersion = await getCurrentVersion(pool);
   const { rows: hops } = await pool.query(
     'SELECT * FROM crawl_results ORDER BY source_norm, hop_index');
   const { rows: amb } = await pool.query('SELECT * FROM mapping_ambiguities ORDER BY source_norm');
@@ -46,6 +48,7 @@ try {
   let md = `# 栏目改版：旧链接落地验证报告（发布前证据）
 
 > 生成时间：${now}
+> 映射版本：**v${currentVersion}**（每条证据均绑定取证时的映射版本；版本前进后旧证据标 stale，不得继续放行）
 > 验证目标白名单：\`http://${config.fixture.host}:${config.fixture.port}\`（随项目启动的本地站点，仅此一个）
 > 本地站点模式：**${fixtureMode}**
 > 最长跳转链：${config.crawl.maxRedirects} 跳；尾斜杠策略：\`${config.rules.tailSlashMode}\`（保留）

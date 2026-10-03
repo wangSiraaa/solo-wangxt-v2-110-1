@@ -3,14 +3,15 @@
  *  1. 业务裁决歧义：保留 /articles/123，删除错误导入 /articles/999；
  *  2. 删除错误的大小写录入 /News/123（旧站本无此资源）；
  *  3. 剔除非本站地址（example.com 不属于本次迁移范围）；
- *  4. 重算生效映射。
+ *  4. 更新原始材料里 /loop/a 的目标为修复后真实落点，再版本化提交：
+ *     生效映射重算、映射版本前进、旧验证证据与方案标过期。
  * 长链与环的修复在站点侧（FIXTURE_MODE=fixed 模拟已上线的修复配置）。
  *
  * 运行：FIXTURE_MODE=fixed node scripts/remediate.js
  */
 import { pool } from '../server/src/db.js';
 import { normalize } from '../server/src/normalize.js';
-import { recomputeMappings } from '../server/src/mappings-service.js';
+import { commitMappingChange } from '../server/src/mappings-service.js';
 import { fixtureOrigin } from '../server/src/config.js';
 
 const O = fixtureOrigin();
@@ -36,18 +37,19 @@ try {
     "DELETE FROM mapping_inputs WHERE source_raw LIKE 'http://example.com%'");
   console.log(`剔除非白名单站点录入 ${r3.rowCount} 条`);
 
-  const { total, conflicted } = await recomputeMappings(client);
-
-  // 4) 环已在站点侧打断：修正映射目标为修复后的真实落点
+  // 4) 环已在站点侧打断：把 /loop/a 的原始声明目标改成修复后的真实落点
   const loopKey = normalize(`${O}/loop/a`).normKey;
-  const loopTarget = normalize(`${O}/articles/tech/42`);
-  await client.query(
-    `UPDATE url_mappings
+  const r4 = await client.query(
+    `UPDATE mapping_inputs
         SET target_raw=$2, target_norm=$3, note='环已打断，直跳到科技文章'
       WHERE source_norm=$1`,
-    [loopKey, `${O}/articles/tech/42`, loopTarget.normKey]);
-  console.log('环修复：/loop/a 的映射目标更新为修复后的真实落点');
-  console.log(`重算生效映射：${total} 条，冲突 ${conflicted} 条`);
+    [loopKey, `${O}/articles/tech/42`, normalize(`${O}/articles/tech/42`).normKey]);
+  console.log(`环修复：更新 /loop/a 的声明目标 ${r4.rowCount} 条`);
+
+  const r = await commitMappingChange(client, { note: '整改脚本：裁决歧义/剔除错误录入/更新环目标' });
+  console.log(`重算生效映射：${r.total} 条，冲突 ${r.conflicted} 条；`
+    + `映射版本 v${r.oldVersion} → v${r.newVersion}`);
+  console.log(`旧验证证据已对 ${r.changedKeys.length} 个键标为过期，需重新验证`);
   await client.query('COMMIT');
 } catch (e) {
   await client.query('ROLLBACK');

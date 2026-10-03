@@ -4,7 +4,7 @@
  */
 import { ensureDatabase, pool } from './db.js';
 import { normalize } from './normalize.js';
-import { analyzeInputs } from './ambiguity.js';
+import { recomputeMappings } from './mappings-service.js';
 import { fixtureOrigin } from './config.js';
 
 const O = fixtureOrigin();
@@ -87,7 +87,14 @@ export async function seed() {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('TRUNCATE migration_plan_items, migration_plans, verification_verdicts, crawl_results, url_mappings, mapping_inputs RESTART IDENTITY');
+    await client.query(
+      `TRUNCATE mapping_changeset_items, mapping_changesets, migration_plan_items,
+               migration_plans, mapping_versions, verification_verdicts,
+               crawl_results, url_mappings, mapping_inputs
+       RESTART IDENTITY CASCADE`);
+    await client.query(
+      `INSERT INTO mapping_versions (version, note)
+       VALUES (1, '初始映射版本（种子演示数据）')`);
 
     for (const row of INPUTS) {
       const s = normalize(row.source_raw);
@@ -100,27 +107,10 @@ export async function seed() {
       );
     }
 
-    // 依据输入材料建生效映射；冲突键置 conflicted，不挑赢家
-    const { groups, ambiguous } = analyzeInputs(INPUTS.map((r, i) => ({ id: i + 1, ...r })));
-    const conflictKeys = new Set(ambiguous.map((a) => a.source_norm));
-    for (const [sourceNorm, items] of groups) {
-      const first = items[0];
-      await client.query(
-        `INSERT INTO url_mappings
-           (source_raw, source_norm, target_raw, target_norm, mapping_type, status, note)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [
-          first.source_raw, sourceNorm, first.target_raw, first.t.normKey,
-          first.mapping_type,
-          conflictKeys.has(sourceNorm) ? 'conflicted' : 'active',
-          conflictKeys.has(sourceNorm)
-            ? '同归一化键存在多个不同目标，待人工裁决'
-            : first.note ?? null,
-        ],
-      );
-    }
+    // 初始建表：同步生效映射（冲突键置 conflicted，不挑赢家），不推进版本
+    const { total, conflicted } = await recomputeMappings(client, { bumpVersion: false });
     await client.query('COMMIT');
-    console.log(`seeded ${INPUTS.length} inputs, ${ambiguous.length} ambiguous group(s)`);
+    console.log(`seeded ${INPUTS.length} inputs, ${conflicted} ambiguous group(s), ${total} effective mappings @ v1`);
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;

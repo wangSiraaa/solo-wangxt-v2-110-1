@@ -1,13 +1,29 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import net from 'node:net';
 import { startFixture } from '../src/fixture.js';
 import { crawl, judge } from '../src/verifier.js';
-import { fixtureOrigin } from '../src/config.js';
+import { config, fixtureOrigin } from '../src/config.js';
 
-const O = fixtureOrigin();
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.listen(0, '127.0.0.1', () => {
+      const p = srv.address().port;
+      srv.close(() => resolve(p));
+    });
+    srv.on('error', reject);
+  });
+}
+
+let O;
 let fixture;
 
-before(async () => { fixture = await startFixture(); });
+before(async () => {
+  config.fixture.port = await freePort();
+  O = fixtureOrigin();
+  fixture = await startFixture();
+});
 after(async () => { await fixture.close(); });
 
 test('编码中文路径 + 追踪参数：301 到新页且参数保留', async () => {

@@ -59,9 +59,16 @@
   </div>
 
   <div class="panel">
-    <h2>原始录入材料（mapping_inputs）与生效映射</h2>
+    <h2>
+      原始录入材料（mapping_inputs）与生效映射
+      <span class="badge neutral" style="margin-left:8px">映射版本 v{{ version }}</span>
+    </h2>
+    <p class="muted small">
+      发布临近时建议改用“映射变更集”标签页起草改动：直接录入也会版本化提交，
+      并立即把受影响链接的旧验证证据与未发布方案标为过期。
+    </p>
     <table>
-      <thead><tr><th>#</th><th>原始旧址</th><th>归一化键</th><th>新址</th><th>类型</th><th>状态</th><th>备注</th></tr></thead>
+      <thead><tr><th>#</th><th>原始旧址</th><th>归一化键</th><th>新址</th><th>类型</th><th>状态</th><th>证据</th><th>备注</th></tr></thead>
       <tbody>
         <tr v-for="i in inputs" :key="i.id">
           <td>{{ i.id }}</td>
@@ -72,6 +79,11 @@
           <td>
             <span v-if="mappingStatus(i.source_norm) === 'conflicted'" class="badge warn">歧义</span>
             <span v-else class="badge ok">生效</span>
+          </td>
+          <td>
+            <span v-if="i.verdict_stale || i.needs_reverify" class="badge bad">待重新验证</span>
+            <span v-else-if="i.verdict" class="badge ok">v{{ i.verdict_version }} 已验证</span>
+            <span v-else class="badge neutral">未验证</span>
           </td>
           <td class="small muted">{{ i.note }}</td>
         </tr>
@@ -92,6 +104,7 @@ const error = ref('');
 const inputs = ref([]);
 const mappings = ref([]);
 const ambiguities = ref([]);
+const version = ref(1);
 const trialText = ref(
   ['http://127.0.0.1:4568/news/123?ref=homepage',
    'http://127.0.0.1:4568/News/123?ref=homepage',
@@ -104,6 +117,7 @@ const trialResults = ref([]);
 async function load() {
   const d = await api.mappings();
   inputs.value = d.inputs; mappings.value = d.mappings; ambiguities.value = d.ambiguities;
+  version.value = d.mapping_version;
 }
 function mappingStatus(key) {
   return mappings.value.find((m) => m.source_norm === key)?.status;

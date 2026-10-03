@@ -2,10 +2,15 @@
  * 验证流水线：对每条生效映射真实请求本地站点，
  * 保存每一跳证据（crawl_results）与最终裁决（verification_verdicts）。
  * 冲突键不请求，直接判 ambiguity —— 连请求都不应该开始。
+ *
+ * 版本绑定：裁决写入时记录当时的映射版本（mapping_version）。
+ * 变更集应用使版本前进后，旧裁决由 mappings-service 统一置 stale=true；
+ * 重新验证（针对当前版本）会把 stale 复位为 false。
  */
 import { pool } from './db.js';
 import { normalize } from './normalize.js';
 import { judge } from './verifier.js';
+import { getCurrentVersion } from './mappings-service.js';
 
 const VERDICT_LABEL = {
   ok: '通过',
@@ -19,6 +24,7 @@ const VERDICT_LABEL = {
 };
 
 export async function runVerification({ onlyKey = null } = {}) {
+  const currentVersion = await getCurrentVersion(pool);
   if (!onlyKey) {
     // 清理已不在 url_mappings 中的旧裁决与爬取证据（映射被剔除后不得残留结论）
     await pool.query(
@@ -51,6 +57,7 @@ export async function runVerification({ onlyKey = null } = {}) {
       await saveVerdict({
         sourceNorm: m.source_norm, sourceRaw: m.source_raw,
         verdict: 'ambiguity', issues, final: {}, hops: 0, tracker: null,
+        mappingVersion: Number(m.mapping_version),
       });
       results.push({ source_norm: m.source_norm, verdict: 'ambiguity', issues });
       continue;
@@ -65,10 +72,12 @@ export async function runVerification({ onlyKey = null } = {}) {
       await pool.query(
         `INSERT INTO crawl_results
            (source_norm, hop_index, url_raw, url_norm, status_code,
-            location_raw, location_norm, is_redirect, fetch_error)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+            location_raw, location_norm, is_redirect, fetch_error,
+            mapping_version, stale)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false)`,
         [m.source_norm, h.index, h.url_raw, h.url_norm, h.status,
-         h.location_raw ?? null, h.location_norm ?? null, h.is_redirect, h.fetch_error ?? null],
+         h.location_raw ?? null, h.location_norm ?? null, h.is_redirect, h.fetch_error ?? null,
+         Number(m.mapping_version)],
       );
     }
     await saveVerdict({
@@ -78,27 +87,31 @@ export async function runVerification({ onlyKey = null } = {}) {
       },
       hops: crawl.hops.length,
       tracker,
+      mappingVersion: Number(m.mapping_version),
     });
-    results.push({ source_norm: m.source_norm, verdict, issues, hops: crawl.hops.length });
+    results.push({ source_norm: m.source_norm, verdict, issues, hops: crawl.hops.length,
+                   mapping_version: Number(m.mapping_version) });
   }
-  return { count: results.length, results, label: VERDICT_LABEL };
+  void currentVersion;
+  return { count: results.length, results, label: VERDICT_LABEL, mapping_version: currentVersion };
 }
 
-async function saveVerdict({ sourceNorm, sourceRaw, verdict, issues, final, hops, tracker }) {
+async function saveVerdict({ sourceNorm, sourceRaw, verdict, issues, final, hops, tracker, mappingVersion }) {
   await pool.query(
     `INSERT INTO verification_verdicts
        (source_norm, source_raw, final_url_raw, final_url_norm, final_status,
-        hops, tracker_preserved, verdict, issues, verified_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+        hops, tracker_preserved, verdict, issues, verified_at, mapping_version, stale)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now(),$10,false)
      ON CONFLICT (source_norm) DO UPDATE SET
        source_raw=EXCLUDED.source_raw, final_url_raw=EXCLUDED.final_url_raw,
        final_url_norm=EXCLUDED.final_url_norm, final_status=EXCLUDED.final_status,
        hops=EXCLUDED.hops, tracker_preserved=EXCLUDED.tracker_preserved,
-       verdict=EXCLUDED.verdict, issues=EXCLUDED.issues, verified_at=now()`,
+       verdict=EXCLUDED.verdict, issues=EXCLUDED.issues, verified_at=now(),
+       mapping_version=EXCLUDED.mapping_version, stale=false`,
     [sourceNorm, sourceRaw, final.raw ?? null, final.norm ?? null, final.status ?? null,
      hops,
      tracker ? tracker.ok : null,
-     verdict, JSON.stringify(issues)],
+     verdict, JSON.stringify(issues), mappingVersion],
   );
 }
 
