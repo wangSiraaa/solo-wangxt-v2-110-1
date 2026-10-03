@@ -1,6 +1,10 @@
 <template>
   <div class="panel">
     <h2>录入旧→新映射（原始形式，先留证再归一）</h2>
+    <div class="callout" style="margin-bottom:10px">
+      临近发布的批量改动请使用 <b>「变更集」</b> 页：直接录入会立即推进映射版本，
+      使既有逐跳证据与迁移方案标为过期。
+    </div>
     <div class="row">
       <label class="field" style="flex:3">
         <span>旧址 URL（保留真实写法：大小写、%XX、尾斜杠、追踪参数）</span>
@@ -59,7 +63,7 @@
   </div>
 
   <div class="panel">
-    <h2>原始录入材料（mapping_inputs）与生效映射</h2>
+    <h2>原始录入材料（mapping_inputs）与生效映射 · 当前版本 v{{ currentVersion }}</h2>
     <table>
       <thead><tr><th>#</th><th>原始旧址</th><th>归一化键</th><th>新址</th><th>类型</th><th>状态</th><th>备注</th></tr></thead>
       <tbody>
@@ -92,6 +96,7 @@ const error = ref('');
 const inputs = ref([]);
 const mappings = ref([]);
 const ambiguities = ref([]);
+const currentVersion = ref(1);
 const trialText = ref(
   ['http://127.0.0.1:4568/news/123?ref=homepage',
    'http://127.0.0.1:4568/News/123?ref=homepage',
@@ -104,6 +109,7 @@ const trialResults = ref([]);
 async function load() {
   const d = await api.mappings();
   inputs.value = d.inputs; mappings.value = d.mappings; ambiguities.value = d.ambiguities;
+  currentVersion.value = d.current_version;
 }
 function mappingStatus(key) {
   return mappings.value.find((m) => m.source_norm === key)?.status;

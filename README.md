@@ -24,6 +24,13 @@
 5. **PostgreSQL 保存三类数据**：旧新映射（原始材料 `mapping_inputs` + 生效表
    `url_mappings`）、爬取逐跳结果（`crawl_results`）、迁移方案（`migration_plans`
    / `migration_plan_items`），另存每入口最终裁决 `verification_verdicts`。
+6. **映射变更集（`mapping_changesets`）与版本线（`mapping_versions`）**：
+   临近发布的批量改动不再直接改验证依据——变更集冻结创建时的映射版本、
+   规范化改动行与当时生效映射快照，经历草稿→可审阅→已应用（或已过期/已放弃）。
+   应用在单事务内做版本冲突检测、规范化歧义重算与生效映射重写；外网目标、
+   无效编码、冲突项任一项不过则整体回滚，绝无“半套改动”落库。逐跳证据、
+   最终裁决与迁移方案都绑定具体映射版本；新版本生效后旧证据/旧方案明确标为
+   过期、不再放行，必须重新验证并重建。
 
 ## 快速开始
 
@@ -36,7 +43,7 @@ npm run pg:start        # 启动 tools/ 下的本地 PostgreSQL（127.0.0.1:5543
 npm run migrate         # 建库 + 建表
 npm run seed            # 写入 10 条演示录入（含全部异常场景）
 
-npm test                # 19 项测试：规范化规则 + 验证器集成（真实启动本地站点）
+npm test                # 25 项测试：规范化规则 + 验证器集成 + 变更集五项验收（真实库/本地站点）
 npm run verify          # CLI：对全部映射真实请求验证并给出裁决
 node scripts/report.js  # 产出 docs/verification-report-before.md 风格的证据报告
 
@@ -89,10 +96,32 @@ blocked/pending、未纳入的生效映射或未裁决歧义，就返回 **409 +
 | 方法/路径 | 作用 |
 |---|---|
 | `POST /api/normalize` | 规范化试算（不写库） |
-| `GET/POST /api/mappings` | 原始录入材料 / 录入一条（自动重算生效与冲突） |
-| `POST /api/verify` | 对全部（或指定 `source_norm`）真实验证 |
-| `GET /api/crawl/:key` | 查看某条链接的逐跳证据 |
-| `GET/POST /api/plans`、`POST /api/plans/:id/build`、`POST /api/plans/:id/publish` | 方案与发布闸门 |
+| `GET/POST /api/mappings` | 原始录入材料 / 录入一条（立即推进版本，会令旧证据过期；批量改动请走变更集） |
+| `GET /api/versions` | 映射版本线（每个版本及来源变更集） |
+| `POST /api/changesets` | 创建变更集：冻结 `base_version`、规范化改动行与生效映射快照（支持 `idempotency_key`） |
+| `GET /api/changesets`、`GET /api/changesets/:id` | 变更集列表（状态/问题计数）/ 详情（逐条差异、过期三方差异、逐字 payload 审计） |
+| `POST /api/changesets/:id/submit` | 草稿 → 可审阅（带冻结问题的变更集被 422 拦截） |
+| `POST /api/changesets/:id/apply` | 事务内版本检测→写原始材料→推进版本→重算歧义/生效映射；冲突转过期并返回三方差异；重复提交幂等 |
+| `POST /api/changesets/:id/abandon` | 放弃草稿/可审阅变更集 |
+| `POST /api/verify` | 对全部（或指定 `source_norm`）真实验证，证据带映射版本 |
+| `GET /api/crawl/:key` | 逐跳证据（`stale=true` 表示证据版本早于当前映射版本） |
+| `GET/POST /api/plans`、`POST /api/plans/:id/build`、`POST /api/plans/:id/publish` | 方案与发布闸门（方案绑定映射版本，过期方案拒绝发布） |
+
+### 变更集典型流程
+
+```bash
+# 1) 创建（冻结 v3 快照与改动行；外网/坏编码/批内歧义在 validation 里留痕）
+curl -X POST .../api/changesets -d '{"name":"秋季批次","changes":[
+  {"op":"upsert","source_raw":".../old/1","target_raw":".../new/1"},
+  {"op":"delete","source_raw":".../retired"}]}'
+# 2) 负责人审阅差异后提交、应用
+curl -X POST .../api/changesets/4/submit
+curl -X POST .../api/changesets/4/apply
+#    → {applied:true, applied_version:5}；旧证据/方案随即标为过期
+# 3) 两个变更集改同一 canonical key：后到者 {expired:true, conflicts:[三方差异]}，不覆盖
+# 4) 同一 idempotency_key 的创建/对已应用变更集的重复 apply 返回同一结果
+# 5) 重新验证 + 重建方案，发布闸门才放行
+```
 
 ## 环境变量（见 `.env.example`）
 
@@ -120,11 +149,12 @@ cd /workspace && npm run pg:start
 
 ```
 server/src/   normalize.js(规范化规则) verifier.js(白名单/环/长链/最终状态)
-              ambiguity.js mappings-service.js verify-runner.js
+              ambiguity.js mappings-service.js(版本线/重算)
+              changesets-service.js(冻结/事务应用/三方差异) verify-runner.js(版本化证据)
               fixture.js(随项目本地站点) routes.js(Fastify) db.js
 server/sql/   schema.sql
-web/          Vue 3 + Vite 工作台（总览/证据/方案闸门/规则四页）
+web/          Vue 3 + Vite 工作台（总览/变更集/映射证据/方案闸门/规则五页）
 scripts/      start-pg.js remediate.js report.js
 docs/         verification-report-before.md / -after.md（真实跑出来的证据）
-server/test/  规则单测 + 验证器集成测试（19 项）
+server/test/  规则单测 + 验证器集成 + 变更集验收（25 项，含真实并发）
 ```

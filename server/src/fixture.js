@@ -26,6 +26,9 @@ export function buildFixtureApp() {
     '/sections/weekly',
     '/files%2Fdraft',
     '/chain/7',
+    // 变更集集成测试专用的新增/修改落点（始终可达）
+    '/sections/new/1',
+    '/sections/changed',
   ]);
   const pageTitles = {
     '/articles/tech/42': '科技频道文章 42',
@@ -33,6 +36,8 @@ export function buildFixtureApp() {
     '/sections/weekly': '周刊栏目',
     '/files%2Fdraft': '文件名中带斜杠字符的草稿页（编码斜杠是合法文件名）',
     '/chain/7': '长链终点页',
+    '/sections/new/1': '变更集新增栏目页 1',
+    '/sections/changed': '变更集修改后的落点页',
   };
 
   /**
@@ -45,6 +50,10 @@ export function buildFixtureApp() {
     ['/news/123', '/articles/123'],
     ['/column/weekly/', '/sections/weekly'],
     ['/old-files%2Fdraft', '/files%2Fdraft'],
+    // 变更集集成测试：新增/修改/删除的旧址（两种模式下行为一致）
+    ['/new-column/1', '/sections/new/1'],
+    ['/cs/before', '/sections/changed'],
+    ['/cs/gone', '/sections/changed'],
     // 修复模式：长链改直跳、环打断；默认模式保留缺陷
     ...(fixed
       ? [

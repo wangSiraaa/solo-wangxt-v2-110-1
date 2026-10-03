@@ -3,7 +3,8 @@
     <h2>迁移方案</h2>
     <p class="muted small">
       “纳入方案”只是 pending；执行验证后，证据齐全且裁决通过才是 verified。
-      发布闸门拒绝任何 blocked/pending、未纳入的生效映射或未裁决歧义。
+      发布闸门拒绝任何 blocked/pending、未纳入的生效映射、未裁决歧义，以及
+      <b>依据旧映射版本的方案</b>——变更集应用后必须重新验证并重建才可发布。
     </p>
     <div class="row" style="align-items:flex-end">
       <label class="field" style="flex:3">
@@ -15,11 +16,16 @@
       </div>
     </div>
     <table style="margin-top:10px">
-      <thead><tr><th>ID</th><th>名称</th><th>状态</th><th>条目</th><th>已验证</th><th>阻断</th><th>待验证</th><th></th></tr></thead>
+      <thead><tr><th>ID</th><th>名称</th><th>状态</th><th>依据版本</th><th>条目</th><th>已验证</th><th>阻断</th><th>待验证</th><th></th></tr></thead>
       <tbody>
         <tr v-for="p in plans" :key="p.id">
           <td>{{ p.id }}</td><td>{{ p.name }}</td>
           <td><span class="badge" :class="p.status === 'published' ? 'ok' : 'neutral'">{{ statusText(p.status) }}</span></td>
+          <td>
+            v{{ p.mapping_version }}
+            <span v-if="p.stale" class="badge bad">已过期</span>
+            <span v-else-if="p.status === 'published' && p.published_version" class="badge ok">发布于 v{{ p.published_version }}</span>
+          </td>
           <td>{{ p.items }}</td><td>{{ p.verified }}</td>
           <td :style="Number(p.blocked) ? 'color:var(--bad)' : ''">{{ p.blocked }}</td>
           <td>{{ p.pending }}</td>
@@ -34,7 +40,18 @@
   </div>
 
   <div class="panel" v-if="detail">
-    <h2>方案 #{{ detail.plan.id }}：{{ detail.plan.name }}（{{ statusText(detail.plan.status) }}）</h2>
+    <h2>
+      方案 #{{ detail.plan.id }}：{{ detail.plan.name }}（{{ statusText(detail.plan.status) }}）
+      <span v-if="detail.stale" class="badge bad" style="margin-left:8px">
+        依据 v{{ detail.plan.mapping_version }}，当前已 v{{ detail.current_version }}：旧证据/旧方案过期
+      </span>
+      <span v-else class="badge ok" style="margin-left:8px">依据当前 v{{ detail.plan.mapping_version }}</span>
+    </h2>
+    <div v-if="detail.stale" class="callout bad">
+      映射在方案冻结后发生了变更（新版本由变更集应用或直接录入产生）。
+      本方案的逐跳证据与条目状态都是旧版本留档，<b>不能再发布</b>：
+      先到「验证总览」对全部映射重新验证，再回到这里「纳入全部生效映射」重建方案。
+    </div>
     <div v-if="lastPublish && !lastPublish.published">
       <div class="callout bad">
         <b>发布被拒绝，受影响链接：</b>
@@ -59,8 +76,9 @@
             <span class="badge" :class="it.item_status === 'verified' ? 'ok' : it.item_status === 'blocked' ? 'bad' : 'neutral'">
               {{ it.item_status === 'verified' ? '已验证' : it.item_status === 'blocked' ? '阻断' : '仅填表' }}
             </span>
+            <div v-if="it.evidence?.mapping_version !== undefined && Number(it.evidence.mapping_version) !== Number(detail.current_version)" class="badge bad" style="margin-top:2px">证据 v{{ it.evidence.mapping_version }} 过期</div>
           </td>
-          <td class="mono">{{ it.source_raw }}</td>
+          <td class="mono">{{ it.source_raw || `（映射已删除：${it.evidence?.source_norm ?? '?'}）` }}</td>
           <td class="mono">{{ it.evidence?.proposed_redirect_url || '（已删除，返回 410/404）' }}</td>
           <td class="small">
             <div>最终状态：{{ it.evidence?.final_status ?? '—' }}；跳数：{{ it.evidence?.hops ?? '—' }}</div>
@@ -84,7 +102,11 @@ const newName = ref('');
 const detail = ref(null);
 const lastPublish = ref(null);
 
-async function load() { plans.value = await api.plans(); if (detail.value) await open(detail.value.plan.id); }
+async function load() {
+  const d = await api.plans();
+  plans.value = d.plans;
+  if (detail.value) await open(detail.value.plan.id);
+}
 async function create() {
   if (!newName.value.trim()) return;
   await api.createPlan(newName.value.trim());

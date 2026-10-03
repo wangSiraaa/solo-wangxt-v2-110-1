@@ -14,6 +14,11 @@
       </div>
     </div>
 
+    <div v-if="staleKeys > 0" class="callout bad" style="margin-top:8px">
+      ⚠️ {{ staleKeys }} 条链接的验证证据来自<b>旧映射版本</b>，已明确标为过期、不再放行发布；
+      变更集应用改变了生效映射，必须对当前版本重新验证。
+    </div>
+
     <div class="kpi" style="margin-top:12px">
       <div class="card"><div class="num" style="color:var(--ok)">{{ counts.ok }}</div><div class="lbl">通过（含已删除正确消亡）</div></div>
       <div class="card"><div class="num" style="color:var(--warn)">{{ counts.ambiguity }}</div><div class="lbl">归一化歧义</div></div>
@@ -27,12 +32,12 @@
     <table>
       <thead>
         <tr>
-          <th>裁决</th><th>旧址（原始录入）</th><th>最终 URL</th><th>最终状态</th>
-          <th>跳数</th><th>追踪参数</th><th>问题 / 证据</th>
+          <th>裁决</th><th>旧址（生效映射）</th><th>最终 URL</th><th>最终状态</th>
+          <th>跳数</th><th>追踪参数</th><th>版本/证据</th><th>问题 / 证据</th>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="row in rows" :key="row.id">
+        <tr v-for="row in rows" :key="row.source_norm">
           <td><VerdictBadge :verdict="row.verdict" :label="label" /></td>
           <td class="mono">{{ row.source_raw }}</td>
           <td class="mono">{{ row.final_url_raw || '—' }}</td>
@@ -42,6 +47,12 @@
             <span v-if="row.tracker_preserved === true" class="badge ok">已保留</span>
             <span v-else-if="row.tracker_preserved === false" class="badge bad">丢失</span>
             <span v-else class="badge neutral">—</span>
+          </td>
+          <td>
+            <div class="small">证据 v{{ row.verdict_version ?? '—' }} / 当前 v{{ currentVersion }}</div>
+            <span v-if="row.verdict_version && Number(row.verdict_version) < Number(currentVersion)" class="badge bad">证据已过期</span>
+            <span v-else-if="!row.verdict" class="badge warn">待验证</span>
+            <span v-else class="badge ok">当前版本</span>
           </td>
           <td>
             <ul v-if="row.issues && row.issues.length" class="issues">
@@ -59,7 +70,13 @@
   </div>
 
   <div class="panel" v-if="hops.length">
-    <h2>逐跳证据：{{ hopsKey }}</h2>
+    <h2>
+      逐跳证据：{{ hopsKey }}
+      <span v-if="hopsStale" class="badge bad" style="margin-left:8px">
+        该证据来自旧映射版本 v{{ hopsEvidenceVersion }}（当前 v{{ hopsCurrentVersion }}），仅留档、不再放行
+      </span>
+      <span v-else class="badge ok" style="margin-left:8px">证据版本 v{{ hopsEvidenceVersion }} = 当前版本</span>
+    </h2>
     <table>
       <thead><tr><th>#</th><th>请求 URL（规范化）</th><th>状态</th><th>Location（原样）</th><th>错误</th></tr></thead>
       <tbody>
@@ -85,6 +102,11 @@ const label = ref({});
 const running = ref(false);
 const hops = ref([]);
 const hopsKey = ref('');
+const hopsStale = ref(false);
+const hopsEvidenceVersion = ref(null);
+const hopsCurrentVersion = ref(1);
+const currentVersion = ref(1);
+const staleKeys = ref(0);
 
 const counts = computed(() => {
   const c = { ok: 0, ambiguity: 0, loop: 0, long: 0, badStatus: 0, fetch: 0, unverified: 0 };
@@ -103,12 +125,10 @@ const counts = computed(() => {
 async function load() {
   const d = await api.mappings();
   label.value = d.verdictLabel;
-  // 输入材料去重为每个归一化键一行展示
-  const byKey = new Map();
-  for (const i of d.inputs) {
-    if (!byKey.has(i.source_norm)) byKey.set(i.source_norm, i);
-  }
-  rows.value = [...byKey.values()];
+  currentVersion.value = d.current_version;
+  staleKeys.value = d.stale_evidence_keys;
+  // 待验证清单以“生效映射”为准，裁决取当前版本（左连接；无当前版本裁决即为待验证）
+  rows.value = d.mappings;
 }
 async function runAll() {
   running.value = true;
@@ -117,7 +137,11 @@ async function runAll() {
 }
 async function showHops(row) {
   hopsKey.value = row.source_norm;
-  hops.value = await api.crawl(row.source_norm);
+  const d = await api.crawl(row.source_norm);
+  hops.value = d.hops;
+  hopsStale.value = d.stale;
+  hopsEvidenceVersion.value = d.evidence_version;
+  hopsCurrentVersion.value = d.current_version;
 }
 function fmt(ts) { return new Date(ts).toLocaleString('zh-CN'); }
 onMounted(load);

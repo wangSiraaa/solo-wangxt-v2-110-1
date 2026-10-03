@@ -87,7 +87,13 @@ export async function seed() {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('TRUNCATE migration_plan_items, migration_plans, verification_verdicts, crawl_results, url_mappings, mapping_inputs RESTART IDENTITY');
+    await client.query(
+      `TRUNCATE mapping_changesets, migration_plan_items, migration_plans,
+                verification_verdicts, crawl_results, url_mappings, mapping_inputs
+       RESTART IDENTITY`);
+    await client.query('TRUNCATE mapping_versions RESTART IDENTITY CASCADE');
+    await client.query(`INSERT INTO mapping_versions (version, label) VALUES (1, 'baseline')`);
+    await client.query(`SELECT setval(pg_get_serial_sequence('mapping_versions','version'), 1, true)`);
 
     for (const row of INPUTS) {
       const s = normalize(row.source_raw);

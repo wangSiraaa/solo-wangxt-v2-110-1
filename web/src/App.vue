@@ -11,6 +11,7 @@
   <main>
     <RulesView v-if="tab === 'rules'" />
     <DashboardView v-else-if="tab === 'dash'" />
+    <ChangesetsView v-else-if="tab === 'cs'" :refresh-key="refreshKey" />
     <MappingsView v-else-if="tab === 'maps'" :refresh-key="refreshKey" @changed="bump" />
     <PlansView v-else-if="tab === 'plans'" :refresh-key="refreshKey" />
   </main>
@@ -21,10 +22,12 @@ import { ref } from 'vue';
 import RulesView from './views/RulesView.vue';
 import DashboardView from './views/DashboardView.vue';
 import MappingsView from './views/MappingsView.vue';
+import ChangesetsView from './views/ChangesetsView.vue';
 import PlansView from './views/PlansView.vue';
 
 const tabs = [
   { id: 'dash', label: '验证总览' },
+  { id: 'cs', label: '变更集' },
   { id: 'maps', label: '映射与爬取证据' },
   { id: 'plans', label: '迁移方案 / 发布闸门' },
   { id: 'rules', label: '规范化规则' },

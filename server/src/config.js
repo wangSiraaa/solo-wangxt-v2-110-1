@@ -57,3 +57,17 @@ export const config = {
 export function fixtureOrigin() {
   return `http://${config.fixture.host}:${config.fixture.port}`;
 }
+
+/**
+ * 一个已规范化的 URL 是否属于“随项目启动的本地站点”。
+ * 验证器与变更集共用同一条边界：只有字面 host:port 等于配置值的 http(s)
+ * URL 可被接受为映射目标，外网地址、其它端口、主机名一律拒绝（防 SSRF）。
+ */
+export function isLocalOrigin(normalized) {
+  if (!normalized?.ok) return false;
+  return (
+    (normalized.href.startsWith('http:') || normalized.href.startsWith('https:')) &&
+    normalized.host === config.fixture.host &&
+    normalized.port === String(config.fixture.port)
+  );
+}
